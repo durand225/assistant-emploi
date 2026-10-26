@@ -215,7 +215,68 @@ def reconcile_wallet(conn: sqlite3.Connection, threshold_days: int = 7) -> dict:
             "message": r["message"],
         })
 
+    # 5. Transactions anciennes toujours en attente (pas deération).
+    rows = conn.execute(
+        "SELECT id, amount_cents FROM payment_pending WHERE status = 'en_attente' "
+        "AND created_at < datetime('now', '-7 days')"
+    ).fetchall()
+    for r in rows:
+        summary["old_reservations"].append({
+            "payment_id": r["id"],
+            "amount_cents": r["amount_cents"],
+            "status": "en_attente",
+        })
+
     return summary
+
+
+# ============================================================================
+# Rapport d'état serveur (administration)
+# ============================================================================
+
+def health_report(conn: sqlite3.Connection) -> dict:
+    """Rapport d'état du serveur pour le panneau d'administration."""
+    user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    wallet_count = conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0]
+    ledger_total = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM ledger_entries"
+    ).fetchone()[0]
+
+    # Statut des usages récents
+    recent_actions = conn.execute(
+        "SELECT COUNT(*) FROM actions WHERE created_at >= datetime('now', '-1 hour')"
+    ).fetchone()[0]
+
+    # Paiements en attente (total)
+    pending = conn.execute(
+        "SELECT SUM(amount_cents) FROM payment_pending WHERE status = 'en_attente'"
+    ).fetchone()[0] or 0
+
+    # Sources actives
+    src = conn.execute(
+        "SELECT COUNT(*) FROM source_registry WHERE status = 'active'"
+    ).fetchone()[0]
+
+    # Erreurs récentes
+    err = conn.execute(
+        "SELECT COUNT(*) FROM errors WHERE created_at >= datetime('now', '-1 day')"
+    ).fetchone()[0]
+
+    # Tâches sans conducteur
+    no_driver = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE state = 'terminée' AND driver_id IS NULL"
+    ).fetchone()[0]
+
+    return {
+        "users": user_count,
+        "wallets": wallet_count,
+        "ledger_total": ledger_total,
+        "recent_actions_1h": recent_actions,
+        "pending_total": pending,
+        "active_sources": src,
+        "errors_1d": err,
+        "tasks_without_driver": no_driver,
+    }
 
 
 # ============================================================================
